@@ -39,7 +39,7 @@ https://multigesture.net/articles/how-to-write-an-emulator-chip-8-interpreter/
 #define SC8_ATTR_FORMAT(a, b) __attribute__((format(printf, a, b)))
 
 #define SC8_LSB(val) ((val) & 1)
-#define SC8_MSB(val) ((int)(val) < 0) // not portable blah blah blah I don't care
+#define SC8_MSB(val) ((val) >> (sizeof(val)*8 - 1) & 1) // not portable blah blah blah I don't care
 
 #define SC8_MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define SC8_MIN(a, b) (((a) < (b)) ? (a) : (b))
@@ -252,11 +252,11 @@ sc8_LoadFileResult sc8_loadFile(sc8_state *state, const char *file_path) {
     size_t rom_size = sc8_fread(state->memory + 512, 1, MEMORY_SIZE - 512, f);
     sc8_fclose(f);
 
-    return rom_size < 0;
+    return rom_size == 0;
 }
 
 void sc8_loadRomPad(sc8_state *state, const uint8_t *rom, size_t rom_size, int padding) {
-    assert((rom_size < (MEMORY_SIZE - padding)) && "The ROM size is greater than the maximum memory size");
+    assert((rom_size < (size_t)(MEMORY_SIZE - padding)) && "The ROM size is greater than the maximum memory size");
     memcpy(state->memory + padding, rom, rom_size);
 }
 
@@ -269,7 +269,7 @@ sc8_LoadFileResult sc8_loadFilePad(sc8_state *state, const char *file_path, int 
     size_t rom_size = sc8_fread(state->memory + padding, 1, MEMORY_SIZE - padding, f);
     sc8_fclose(f);
 
-    return rom_size < 0;
+    return rom_size == 0;
 }
 
 bool sc8_step(sc8_state *state) {
@@ -387,14 +387,17 @@ bool sc8_step(sc8_state *state) {
         } break;
         case 0xD000: {
             const uint8_t x = state->v[SC8_Vx(opcode)], y = state->v[SC8_Vy(opcode)];
-            uint8_t height = state->v[SC8_N(opcode)];
+            uint8_t height = SC8_N(opcode);
             
             state->vf = 0;
             for(int irow = 0; irow < height; irow++) {
-                uint8_t row = state->memory[state->i + irow];
-                if((state->gfx[x * (y + irow)] & row) != 0) // with this one simple trick, you can check if
-                    state->vf = 1;                          // a XOR will flip a 1 to 0. It's neat.
-                state->gfx[x * (y + irow)] ^= row;
+                uint8_t row = state->memory[0 + irow];
+                for(int ipixel = 0; ipixel < 8; ipixel++) {
+                    bool pixel = (row & (0x80 >> ipixel)) != 0;
+                    const int index = (x + ipixel) * ((y + irow) * SC8_W);
+                    state->vf = pixel && (state->gfx[index] != 0);
+                    state->gfx[index] ^= pixel;
+                }
             }
 
             state->drawFlag = true;

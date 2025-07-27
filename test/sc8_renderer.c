@@ -7,6 +7,10 @@
 #define SDL_MAIN_HANDLED
 #include "SDL3/SDL.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 sc8_state state; // OH NO EVIL GLOBAL STATTE NONONONONO YOU CAN"T NOT DO THAT NOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
 bool quit;
 
@@ -45,12 +49,26 @@ void sc8_updateKeyArray(sc8_state *state) {
         }
     }
 }
+
+static SDL_AudioStream *beep_stream = NULL;
+#define BEEP_FREQ 440
 void sc8_beep(void) {
-    printf("pretend to beep\n");
+    static int sine_sample = 0;
+
+    static float samples[725]; // I found 725 to be a sweet spot
+    for(size_t i = 0; i < SDL_arraysize(samples); i++) {
+        const float phase = sine_sample * BEEP_FREQ / 8000.0f;
+        samples[i] = SDL_sinf(phase * 2 * SDL_PI_F);
+        sine_sample++;
+    }
+
+    sine_sample %= 8000;
+
+    SDL_PutAudioStreamData(beep_stream, samples, sizeof(samples));
 }
+#undef BEEP_FREQ
 
 #define PIXEL_SCALE 10
-
 int main(int argc, char **argv) {
     if(argc != 2) {
         fprintf(stderr, "Expected usage: %s <ROM file path>\n", argv[0]);
@@ -61,7 +79,7 @@ int main(int argc, char **argv) {
     int err = sc8_loadFile(&state, argv[1]);
     if(err != sc8_loadFile_OK) {
         fprintf(stderr, "Error loading file, code: %d\n", err);
-        //return err;
+        return err;
     }
 
     if(!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
@@ -70,7 +88,29 @@ int main(int argc, char **argv) {
     }
 
     SDL_Window *w = SDL_CreateWindow("CHIP-8", SC8_W * PIXEL_SCALE, SC8_H * PIXEL_SCALE, 0);
+    if(w == NULL) {
+        SDL_Log("Error at creating window: %s", SDL_GetError());
+        return 1;
+    }
     SDL_Renderer *r = SDL_CreateRenderer(w, NULL);
+    if(r == NULL) {
+        SDL_Log("Error creating renderer: %s", SDL_GetError());
+        return 1;
+    }
+
+    SDL_AudioSpec beep_stream_spec;
+    beep_stream_spec.channels = 1;
+    beep_stream_spec.format = SDL_AUDIO_F32;
+    beep_stream_spec.freq = 8000;
+    beep_stream = SDL_OpenAudioDeviceStream(
+        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+        &beep_stream_spec, NULL, NULL
+    );
+    if(beep_stream == NULL) {
+        SDL_Log("Failed to create beep audio stream: %s", SDL_GetError());
+        return 1;
+    }
+    SDL_ResumeAudioStreamDevice(beep_stream);
 
     quit = false;
     while(!quit) {
@@ -83,11 +123,10 @@ int main(int argc, char **argv) {
         }
 
         if(state.drawFlag) {
-            SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+            SDL_SetRenderDrawColor(r, 0x18, 0x18, 0x18, 255);
             SDL_RenderClear(r);
-            printf("pretend to render\n");
             
-            SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
+            SDL_SetRenderDrawColor(r, 90, 255, 90, 255);
             for(int y = 0; y < SC8_H; y++) {
                 for(int x = 0; x < SC8_W; x++) {
                     if(state.gfx[y * SC8_W + x]) {
@@ -98,10 +137,9 @@ int main(int argc, char **argv) {
                         SDL_RenderFillRect(r, &rect);
                     }
                 }
-                state.drawFlag = false;
-                SDL_RenderPresent(r);
             }
-
+            state.drawFlag = false;
+            SDL_RenderPresent(r);
         }
 
         SDL_Delay(64);
